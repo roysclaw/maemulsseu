@@ -1,5 +1,6 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { supabase } from './lib/supabase.js'
 
 const activeTab = ref('naver')
 const email = ref('')
@@ -134,15 +135,13 @@ function getCharCount(tabId) {
   return currentPreviewContent()[tabId].length
 }
 
-const SIGNUP_URL = 'https://script.google.com/macros/s/AKfycbxzbOGOFPWRBuap_1U4wN1fVPzrY5riw4xK7l5PIE7bK7dW7Ewbs9EppHxy0updpF13/exec'
-
 const signupStatus = ref('idle') // idle | submitting | success
 const signupError = ref('')
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 async function handleSignup() {
-  const emailValue = email.value.trim()
+  const emailValue = email.value.trim().toLowerCase()
   signupError.value = ''
 
   if (!emailValue) return
@@ -154,15 +153,42 @@ async function handleSignup() {
 
   signupStatus.value = 'submitting'
 
+  // 중복 체크
   try {
-    await fetch(SIGNUP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: emailValue }),
-      mode: 'no-cors',
-    })
+    const { data: existing } = await supabase
+      .from('signups')
+      .select('email')
+      .eq('email', emailValue)
+      .maybeSingle()
+
+    if (existing) {
+      signupStatus.value = 'idle'
+      signupError.value = '이미 신청하신 이메일입니다 😊'
+      return
+    }
   } catch {
-    // no-cors라 응답 확인 불가, 에러 발생해도 성공 처리
+    // 중복 체크 실패 시 진행 (네트워크 등)
+  }
+
+  // Supabase insert
+  try {
+    const { error } = await supabase
+      .from('signups')
+      .insert({ email: emailValue, created_at: new Date().toISOString() })
+
+    if (error) {
+      // unique 제약 위반 등 중복 에러
+      if (error.code === '23505') {
+        signupStatus.value = 'idle'
+        signupError.value = '이미 신청하신 이메일입니다 😊'
+        return
+      }
+      throw error
+    }
+  } catch {
+    signupStatus.value = 'idle'
+    signupError.value = '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+    return
   }
 
   email.value = ''
@@ -173,6 +199,21 @@ async function handleSignup() {
 function scrollToSection(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
 }
+
+async function fetchSignupCount() {
+  try {
+    const { count, error } = await supabase
+      .from('signups')
+      .select('*', { count: 'exact', head: true })
+    if (!error) applicantCount.value = count ?? 0
+  } catch {
+    // 에러 시 카운터는 0 유지
+  }
+}
+
+onMounted(() => {
+  fetchSignupCount()
+})
 </script>
 
 <template>
